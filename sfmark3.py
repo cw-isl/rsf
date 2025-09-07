@@ -15,7 +15,7 @@ EMBEDDED_CONFIG = r"""{
     "units": "metric"
   },
   "telegram": {
-    "bot_token": "7523443246:AAF-fHGcw4NLgDQDRbDz7j1xOTEFYfeZPQ0",
+    "bot_token": "8203763129:AAH3AUckwP5nY-SZ9aVd-F6Rh6Jakb145SA",
     "allowed_user_ids": [5517670242],
     "mode": "polling",
     "webhook_base": "",
@@ -157,7 +157,7 @@ except Exception:
 # === [SECTION: Paths / Base config file locations] ===========================
 BASE = Path("/root/scal")
 STATE_PATH = BASE / "sframe_state.json"
-PHOTOS_DIR = BASE / "frame_photos"
+PHOTOS_DIR = Path("/root/rsf/photo")
 GCLIENT_PATH = BASE / "google_client_secret.json"
 GTOKEN_PATH = BASE / "google_token.json"
 BASE.mkdir(parents=True, exist_ok=True)
