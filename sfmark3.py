@@ -1195,6 +1195,7 @@ BOARD_HTML = r"""
 <div class="bg" id="bg1"></div>
 <div class="bg2" id="bg2"></div>
 
+<a href="/logout" style="position:fixed;top:10px;right:10px;color:#fff;z-index:10;">Logout</a>
 <div class="frame">
   <div class="top">
     <div class="time" id="clock">--:--</div>
@@ -1670,7 +1671,8 @@ td{padding:4px}
 <h2>Settings</h2>
 <div id="config"></div>
 <h3>Photos</h3>
-<input type="file" id="photo-file" accept="image/*" multiple capture="environment">
+<a href="/logout">Logout</a>
+<input type="file" id="photo-file" accept="image/*" multiple style="display:none">
 <button id="upload-btn">Upload</button>
 <button id="delete-btn">Delete</button>
 <button id="toggle-btn">Show Photos</button>
@@ -1693,14 +1695,42 @@ async function loadConfig(){
     const tr=document.createElement('tr');
     const td1=document.createElement('td');td1.textContent=f.label;tr.appendChild(td1);
     const td2=document.createElement('td');
-    const inp=document.createElement('input');inp.type='password';inp.value=getValue(cfg,f.path);inp.size=40;
+    const inp=document.createElement('input');
+    inp.value=getValue(cfg,f.path);
+    inp.dataset.real=inp.value;
+    inp.dataset.hidden='1';
+    inp.type='text';
+    inp.size=8;
+    inp.value='********';
     td2.appendChild(inp);
-    const eye=document.createElement('span');eye.textContent='\uD83D\uDC41';eye.style.cursor='pointer';eye.style.marginLeft='4px';
-    eye.onclick=()=>{inp.type=inp.type==='password'?'text':'password';};
+    const eye=document.createElement('span');
+    const eyeOpen='<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+    const eyeClosed='<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+    eye.innerHTML=eyeClosed;
+    eye.style.cursor='pointer';eye.style.marginLeft='4px';
+    eye.onclick=()=>{
+      if(inp.dataset.hidden==='1'){
+        inp.dataset.hidden='0';
+        inp.type='text';
+        inp.size=40;
+        inp.value=inp.dataset.real;
+        eye.innerHTML=eyeOpen;
+      }else{
+        inp.dataset.real=inp.value;
+        inp.dataset.hidden='1';
+        inp.type='text';
+        inp.size=8;
+        inp.value='********';
+        eye.innerHTML=eyeClosed;
+      }
+    };
     td2.appendChild(eye);tr.appendChild(td2);
     const td3=document.createElement('td');
     const btn=document.createElement('button');btn.textContent='확인';
-    btn.onclick=async()=>{await fetch('/api/config/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:f.path,value:inp.value})});};
+    btn.onclick=async()=>{
+      const val=inp.dataset.hidden==='1'?inp.dataset.real:inp.value;
+      await fetch('/api/config/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:f.path,value:val})});
+    };
     td3.appendChild(btn);tr.appendChild(td3);
     tbl.appendChild(tr);f.input=inp;
   });
@@ -1719,14 +1749,16 @@ async function loadPhotos(){
     g.appendChild(div);
   });
 }
-document.getElementById('upload-btn').onclick=async()=>{
-  const fi=document.getElementById('photo-file');
+const fi=document.getElementById('photo-file');
+document.getElementById('upload-btn').onclick=()=>fi.click();
+fi.onchange=async()=>{
   if(!fi.files.length)return;
   for(const file of fi.files){
     const fd=new FormData();fd.append('file',file);
     await fetch('/api/upload-photo',{method:'POST',body:fd});
   }
-  fi.value='';loadPhotos();
+  fi.value='';
+  loadPhotos();
 };
 document.getElementById('delete-btn').onclick=async()=>{
   const sel=[...document.querySelectorAll('#photo-gallery input:checked')].map(ch=>ch.value);
@@ -1787,6 +1819,7 @@ body{font-family:system-ui,-apple-system,Segoe UI,Roboto,'Noto Sans KR',sans-ser
 </style>
 </head>
 <body>
+<a href="/logout">Logout</a>
 <div class="card">
   <div class="menu"><button id="menu-btn">⋯</button>
     <div id="menu-popup" class="popup">
@@ -1810,7 +1843,7 @@ def require_login(fn):
     @wraps(fn)
     def wrapper(*a, **k):
         if request.cookies.get("auth") != "1":
-            return redirect("/login")
+            return "<p>로그인이 필요합니다. <a href='/login'>Login</a></p>", 401
         return fn(*a, **k)
     return wrapper
 
@@ -1826,12 +1859,19 @@ def login_page():
         return render_template_string(LOGIN_HTML), 401
     return render_template_string(LOGIN_HTML)
 
+@app.get("/logout")
+def logout():
+    resp = make_response(redirect("/login"))
+    resp.delete_cookie("auth")
+    return resp
+
 @app.get("/home")
 @require_login
 def home_after_login():
     return render_template_string(LANDING_HTML)
 
 @app.get("/board")
+@require_login
 def board():
     return render_template_string(BOARD_HTML)
 
@@ -2239,6 +2279,7 @@ HOME_HTML = r"""
 <title>SCAL Home</title>
 <style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,'Noto Sans KR',sans-serif;padding:24px;line-height:1.6}</style>
 <h2>SCAL  Smart Calendar</h2>
+<a href="/logout">Logout</a>
 <ul>
   <li><a href="/board" target="_blank">Open Board (/board)</a></li>
   <li><a href="/oauth/start">Start Google OAuth</a>  Calendar features</li>
@@ -2254,7 +2295,13 @@ HOME_HTML = r"""
 """
 
 @app.get("/")
+@require_login
 def home():
+    return redirect("/home")
+
+@app.get("/info")
+@require_login
+def info_page():
     return render_template_string(
         HOME_HTML,
         google_ok=have_google_libs(),
