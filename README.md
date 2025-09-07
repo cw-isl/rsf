@@ -24,6 +24,7 @@ source .venv/bin/activate
 python sfmark3.py
 ```
 The server listens on port `5320` and serves the board at `http://<host>:5320/board`.
+Configuration and photo management is available at `http://<host>:5320/setting`.
 Photos for the background slideshow are loaded from `/root/rsf/photo`.
 
 ## Network configuration

@@ -996,6 +996,54 @@ def api_bus():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.get("/api/config")
+def api_config():
+    return jsonify({
+        "frame": {"ical_url": CFG["frame"].get("ical_url", "")},
+        "weather": {"api_key": CFG["weather"].get("api_key", "")},
+        "todoist": {"api_token": CFG["todoist"].get("api_token", "")},
+        "bus": {
+            "key": CFG["bus"].get("key", ""),
+            "city_code": CFG["bus"].get("city_code", ""),
+            "node_id": CFG["bus"].get("node_id", ""),
+        },
+        "telegram": {"bot_token": CFG["telegram"].get("bot_token", "")},
+    })
+
+@app.post("/api/config/set")
+def api_config_set():
+    js = request.get_json(force=True, silent=True) or {}
+    path = js.get("path", "")
+    value = js.get("value", "")
+    cur = CFG
+    parts = path.split(".")
+    for p in parts[:-1]:
+        if p not in cur or not isinstance(cur[p], dict):
+            return jsonify({"error": "invalid path"}), 400
+        cur = cur[p]
+    cur[parts[-1]] = value
+    if path == "frame.ical_url":
+        global _ical_cache
+        _ical_cache = {"url": None, "ts": 0.0, "events": []}
+    return jsonify({"ok": True})
+
+@app.post("/api/config/save")
+def api_config_save():
+    save_config_to_source(CFG)
+    return jsonify({"ok": True})
+
+@app.post("/api/upload-photo")
+def api_upload_photo():
+    if "file" not in request.files:
+        return jsonify({"error": "no file"}), 400
+    f = request.files["file"]
+    if not f.filename:
+        return jsonify({"error": "no filename"}), 400
+    ext = os.path.splitext(f.filename)[1] or ".jpg"
+    fname = f"{int(time.time())}_{secrets.token_hex(4)}{ext}"
+    f.save(PHOTOS_DIR / fname)
+    return jsonify({"ok": True, "filename": fname})
+
 
 # === [SECTION: Board HTML (legacy UI; monthly calendar + photo fade)] ========
 BOARD_HTML = r"""
@@ -1586,10 +1634,85 @@ document.addEventListener('visibilitychange', ()=>{
 </body>
 </html>
 """
+SETTING_HTML = r"""
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Settings</title>
+<style>
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,'Noto Sans KR',sans-serif;padding:20px;line-height:1.6}
+table{border-collapse:collapse}
+td{padding:4px}
+</style>
+</head>
+<body>
+<h2>Settings</h2>
+<div id="config"></div>
+<h3>Photos</h3>
+<input type="file" id="photo-file" accept="image/*" capture="environment">
+<button id="upload-btn">Upload</button>
+<ul id="photo-list"></ul>
+<script>
+const fields=[
+  {label:'iCal URL',path:'frame.ical_url'},
+  {label:'Weather API key',path:'weather.api_key'},
+  {label:'Todoist API token',path:'todoist.api_token'},
+  {label:'Bus API key',path:'bus.key'},
+  {label:'Bus city code',path:'bus.city_code'},
+  {label:'Bus stop ID',path:'bus.node_id'},
+  {label:'Telegram bot token',path:'telegram.bot_token'}
+];
+function getValue(obj,path){return path.split('.').reduce((o,k)=>o&&o[k]!=null?o[k]:'',obj);}
+async function loadConfig(){
+  const r=await fetch('/api/config');const cfg=await r.json();
+  const cont=document.getElementById('config');const tbl=document.createElement('table');
+  fields.forEach(f=>{
+    const tr=document.createElement('tr');
+    const td1=document.createElement('td');td1.textContent=f.label;tr.appendChild(td1);
+    const td2=document.createElement('td');
+    const inp=document.createElement('input');inp.type='text';inp.value=getValue(cfg,f.path);inp.size=40;
+    td2.appendChild(inp);tr.appendChild(td2);
+    const td3=document.createElement('td');
+    const btn=document.createElement('button');btn.textContent='확인';
+    btn.onclick=async()=>{await fetch('/api/config/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:f.path,value:inp.value})});};
+    td3.appendChild(btn);tr.appendChild(td3);
+    tbl.appendChild(tr);f.input=inp;
+  });
+  cont.appendChild(tbl);
+  const saveBtn=document.createElement('button');saveBtn.textContent='저장';
+  saveBtn.onclick=async()=>{await fetch('/api/config/save',{method:'POST'});alert('Saved');};
+  cont.appendChild(saveBtn);
+}
+async function loadPhotos(){
+  const ul=document.getElementById('photo-list');ul.innerHTML='';
+  const r=await fetch('/api/photos');const arr=await r.json();
+  arr.forEach(name=>{
+    const li=document.createElement('li');
+    const a=document.createElement('a');a.href='/photos/'+encodeURIComponent(name);a.textContent=name;a.target='_blank';
+    li.appendChild(a);ul.appendChild(li);
+  });
+}
+document.getElementById('upload-btn').onclick=async()=>{
+  const fi=document.getElementById('photo-file');
+  if(!fi.files.length)return;
+  const fd=new FormData();fd.append('file',fi.files[0]);
+  await fetch('/api/upload-photo',{method:'POST',body:fd});
+  fi.value='';loadPhotos();
+};
+loadConfig();loadPhotos();
+</script>
+</body>
+</html>
+"""
 
 @app.get("/board")
 def board():
     return render_template_string(BOARD_HTML)
+
+@app.get("/setting")
+def setting_page():
+    return render_template_string(SETTING_HTML)
 
 # === [SECTION: Bot state helpers (persist to json file)] ===
 
