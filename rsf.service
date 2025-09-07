@@ -1,0 +1,14 @@
+[Unit]
+Description=Smart Frame service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/rsf
+ExecStart=/root/rsf/run.sh
+Restart=on-failure
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

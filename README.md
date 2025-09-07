@@ -32,3 +32,14 @@ Photos for the background slideshow are loaded from `/root/rsf/photo`.
 - **Telegram bot**: default mode is polling and only requires outbound internet access. To use webhook mode,
   set `telegram.mode` to `"webhook"` and provide a publicly reachable HTTPS URL in `telegram.webhook_base`; ensure this
   URL forwards requests to the server's `:5320` port.
+
+## Autostart with systemd
+To run the application on boot using systemd:
+
+```bash
+sudo cp rsf.service /etc/systemd/system/
+sudo systemctl enable rsf.service
+sudo systemctl start rsf.service
+```
+
+This service runs `run.sh` from `/root/rsf` and restarts on failure.
