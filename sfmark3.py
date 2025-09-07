@@ -503,7 +503,14 @@ try:
     )
 except ModuleNotFoundError:  # pragma: no cover - 테스트 환경용 더미
     Update = InlineKeyboardButton = InlineKeyboardMarkup = ForceReply = object  # type: ignore
-    Application = CallbackQueryHandler = CommandHandler = ContextTypes = MessageHandler = object  # type: ignore
+    Application = CallbackQueryHandler = CommandHandler = MessageHandler = object  # type: ignore
+
+    class DummyContextTypes:
+        """Fallback context holder when telegram.ext is unavailable."""
+
+        DEFAULT_TYPE = object
+
+    ContextTypes = DummyContextTypes  # type: ignore
 
     class filters:  # type: ignore
         TEXT = COMMAND = None
