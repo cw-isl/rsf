@@ -1597,10 +1597,11 @@ if TB:
             [telebot.types.InlineKeyboardButton("2) 버스정보", callback_data="cfg_bus")],
             [telebot.types.InlineKeyboardButton("3) weather api", callback_data="cfg_weather")],
             [telebot.types.InlineKeyboardButton("4) verse", callback_data="set_verse")],
+            [telebot.types.InlineKeyboardButton("5) todo api", callback_data="cfg_todo")],
         ])
         TB.send_message(m.chat.id, "Select category:", reply_markup=kb)
 
-    @TB.callback_query_handler(func=lambda c: c.data in ("cfg_ical", "cfg_weather", "set_verse", "cfg_bus"))
+    @TB.callback_query_handler(func=lambda c: c.data in ("cfg_ical", "cfg_weather", "set_verse", "cfg_bus", "cfg_todo"))
     def on_cb(c):
         if not allowed(c.from_user.id):
             TB.answer_callback_query(c.id, "Not authorized."); return
@@ -1618,6 +1619,11 @@ if TB:
             TB.answer_callback_query(c.id)
             st = load_state(); st[str(c.from_user.id)] = {"mode": "await_verse"}; save_state(st)
             TB.send_message(c.message.chat.id, "input text")
+        elif c.data == "cfg_todo":
+            TB.answer_callback_query(c.id)
+            key = CFG.get("todoist", {}).get("api_token", "(not set)")
+            st = load_state(); st[str(c.from_user.id)] = {"mode": "await_todo_api"}; save_state(st)
+            TB.send_message(c.message.chat.id, f"Current Todoist API token:\n{key}\n\nSend a new token, or /cancel to abort.")
         elif c.data == "cfg_bus":
             TB.answer_callback_query(c.id)
             kb = telebot.types.InlineKeyboardMarkup(row_width=1)
@@ -1768,6 +1774,15 @@ if TB:
             CFG["weather"]["api_key"] = val
             save_config_to_source(CFG)
             TB.reply_to(m, "Weather API key updated.")
+            allst = load_state(); allst.pop(str(m.from_user.id), None); save_state(allst)
+            return
+
+        # todo api token
+        if st.get("mode") == "await_todo_api":
+            val = (m.text or "").strip()
+            CFG["todoist"]["api_token"] = val
+            save_config_to_source(CFG)
+            TB.reply_to(m, "Todo API token updated.")
             allst = load_state(); allst.pop(str(m.from_user.id), None); save_state(allst)
             return
 
