@@ -49,14 +49,12 @@ EMBEDDED_VERSES = r"""테스트"""
 # -*- coding: utf-8 -*-
 """
 Fully-integrated Smart Frame + Telegram bot with Google OAuth routes
-+ Telegram Calendar: view / edit-title / edit-time / delete
-( /cal menu is merged into /set -> '6) Manage Events' )
 (UI restores sframe's older 'Monthly Calendar + Photo Fade' layout)
 
-+ Todoist: fetch tasks and render in 2 columns (10 items each, total 20)
-+ Verse: /set -> verse input that shows on board
-+ Bot duplication guard (file lock) to avoid double polling
-+ Bus: nationwide arrival info via TAGO API with Telegram configuration
+* Todoist: fetch tasks and render in 2 columns (10 items each, total 20)
+* Verse: /set -> verse input that shows on board
+* Bot duplication guard (file lock) to avoid double polling
+* Bus: nationwide arrival info via TAGO API with Telegram configuration
 """
 
 # Code below is organized with clearly marked sections.
@@ -639,19 +637,6 @@ def bb_build_stop_keyboard(stops: List[Tuple[str, str, str]], page: int = 0) -> 
     return InlineKeyboardMarkup(buttons)
 
 
-async def bb_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not bb_check_auth(update):
-        return
-    st = bb_ensure_user_state(update.effective_user.id)
-    await update.message.reply_text(
-        "🚌 버스 도착정보 봇\n"
-        "- /bus\n"
-        "- /stop (정류소 변경)\n"
-        "- /set key <서비스키>\n\n"
-        f"현재설정: city={st['city_code']} / node={st['node_id']} / key={'등록됨' if st['key'] else '미등록'}"
-    )
-
-
 async def bb_cmd_bus(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not bb_check_auth(update):
         return
@@ -765,7 +750,6 @@ async def bb_on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def run_bus_bot():
     app = Application.builder().token(BB_BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", bb_start))
     app.add_handler(CommandHandler("bus", bb_cmd_bus))
     app.add_handler(CommandHandler("set", bb_cmd_set))
     app.add_handler(CommandHandler("stop", bb_cmd_stop))
@@ -927,147 +911,6 @@ def _fmt_start_end(ev):
     s = pick(ev["start"]); e = pick(ev["end"])
     return f"{s} ~ {e}"
 
-def list_upcoming_events(max_results=10):
-    svc = get_google_service()
-    now_iso = datetime.now(timezone.utc).isoformat()
-    res = svc.events().list(
-        calendarId=_cal_id(),
-        timeMin=now_iso,
-        singleEvents=True,
-        orderBy="startTime",
-        maxResults=max_results
-    ).execute()
-    return res.get("items", [])
-
-def send_event_picker(chat_id, action_prefix, max_results=10):
-    """Send inline keyboard to pick an upcoming event."""
-    try:
-        items = list_upcoming_events(max_results=max_results)
-    except Exception as e:
-        TB.send_message(chat_id, f"Failed to fetch events: {e}")
-        return
-    if not items:
-        TB.send_message(chat_id, "No upcoming events.")
-        return
-    kb = telebot.types.InlineKeyboardMarkup(row_width=1)
-    for ev in items:
-        title = ev.get("summary") or "(untitled)"
-        txt = f"{title}  {_fmt_start_end(ev)}"
-        kb.add(telebot.types.InlineKeyboardButton(txt[:64], callback_data=f"pick_{action_prefix}:{ev['id']}"))
-    TB.send_message(chat_id, "Select an event:", reply_markup=kb)
-
-def load_event(ev_id):
-    svc = get_google_service()
-    return svc.events().get(calendarId=_cal_id(), eventId=ev_id).execute()
-
-def patch_event(ev_id, **fields):
-    svc = get_google_service()
-    return svc.events().patch(calendarId=_cal_id(), eventId=ev_id, body=fields).execute()
-
-def delete_event(ev_id):
-    svc = get_google_service()
-    svc.events().delete(calendarId=_cal_id(), eventId=ev_id).execute()
-
-# === [SECTION: Natural-language date/time parsing (ASCII-safe)] ==============
-def _rel_date_en(word):
-    """Simple relative date helper."""
-    today = datetime.now(TZ).date()
-    w = word.lower()
-    if "today" in w:
-        return today
-    if "tomorrow" in w:
-        return today + timedelta(days=1)
-    if "day after" in w:
-        return today + timedelta(days=2)
-    return None
-
-def _parse_date_token(tok, default_year=None):
-    """Parse date token formats: YYYY-MM-DD / YYYY.MM.DD / MM-DD / MM/DD / YYYYMMDD."""
-    tok = tok.strip()
-    d = _rel_date_en(tok)
-    if d: return d
-    m = re.search(r"(\d{4})[./-](\d{1,2})[./-](\d{1,2})", tok)
-    if m:
-        y, mo, da = map(int, m.groups()); return date(y, mo, da)
-    m = re.search(r"(\d{1,2})[./-](\d{1,2})", tok)  # MM/DD or MM-DD
-    if m:
-        mo, da = map(int, m.groups())
-        y = default_year or datetime.now(TZ).year
-        return date(y, mo, da)
-    m = re.search(r"(\d{8})", tok)  # YYYYMMDD
-    if m:
-        s = m.group(1); return date(int(s[0:4]), int(s[4:6]), int(s[6:8]))
-    return None
-
-def _parse_time_one(tok):
-    """Parse time like '14', '14:30', '2pm', '2:15 pm'."""
-    s = tok.strip().lower().replace(" ", "")
-    ampm = None
-    if s.endswith("am"):
-        ampm = "am"; s = s[:-2]
-    elif s.endswith("pm"):
-        ampm = "pm"; s = s[:-2]
-    m = re.match(r"^(\d{1,2})(?::?(\d{2}))?$", s)
-    if not m: return None
-    h = int(m.group(1)); mnt = int(m.group(2) or 0)
-    if ampm == "pm" and 1 <= h < 12: h += 12
-    if ampm == "am" and h == 12: h = 0
-    if not (0 <= h <= 23 and 0 <= mnt <= 59): return None
-    return h, mnt
-
-def parse_when_range(text):
-    """
-    Parse a human text like:
-      '2025-09-02 14:00~16:00'
-      '8/30 9~11'
-      'today 15:00~16:00'
-      '9/1~9/3 (all-day)'
-    """
-    txt = text.strip()
-    y_default = datetime.now(TZ).year
-
-    d_candidates = re.findall(r"(\d{4}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}[./-]\d{1,2}|today|tomorrow|day after|\d{8})", txt, flags=re.IGNORECASE)
-    dates = []
-    for t in d_candidates:
-        dd = _parse_date_token(t, default_year=y_default)
-        if dd: dates.append(dd)
-    dates = dates[:2]
-
-    # time tokens around ~ or - ranges
-    t_left = t_right = None
-    if re.search(r"[~\-]", txt):
-        lr = re.split(r"[~\-]", txt, maxsplit=1)
-        tl = re.findall(r"(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)?)", lr[0], flags=re.IGNORECASE)
-        tr = re.findall(r"(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)?)", lr[1], flags=re.IGNORECASE)
-        if tl: t_left  = _parse_time_one(tl[-1])
-        if tr: t_right = _parse_time_one(tr[0])
-    if not t_left:
-        m = re.findall(r"(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)?)", txt, flags=re.IGNORECASE)
-        if m:
-            t_left = _parse_time_one(m[0])
-            if len(m) >= 2: t_right = _parse_time_one(m[1])
-
-    if dates:
-        start_d = dates[0]
-        end_d = dates[1] if len(dates) >= 2 else dates[0]
-    else:
-        d = _rel_date_en(txt) or datetime.now(TZ).date()
-        start_d = end_d = d
-
-    if t_left:
-        sh, sm = t_left
-        if t_right:
-            eh, em = t_right
-        else:
-            dt2 = (datetime.combine(start_d, datetime.min.time()).replace(tzinfo=TZ) +
-                   timedelta(hours=sh, minutes=sm) + timedelta(hours=1))
-            eh, em = dt2.hour, dt2.minute
-        start_dt = datetime(start_d.year, start_d.month, start_d.day, sh, sm, tzinfo=TZ)
-        end_dt   = datetime(end_d.year, end_d.month, end_d.day, eh, em, tzinfo=TZ)
-        if end_dt <= start_dt: end_dt += timedelta(days=1)
-        return {"kind": "timed", "start_dt": start_dt, "end_dt": end_dt}
-    else:
-        return {"kind": "all_day", "start_date": start_d, "end_date": end_d}
 
 # === [SECTION: REST API endpoints used by the board HTML] ====================
 @app.get("/api/events")
@@ -1731,73 +1574,6 @@ TB = telebot.TeleBot(CFG["telegram"]["bot_token"]) if CFG["telegram"]["bot_token
 ALLOWED = set(CFG["telegram"]["allowed_user_ids"])
 def allowed(uid): return uid in ALLOWED if ALLOWED else True
 
-# === [SECTION: Inline calendar add flow UI helpers] ==========================
-def month_days(year: int, month: int) -> int:
-    if month == 12:
-        return (date(year + 1, 1, 1) - date(year, 12, 1)).days
-    return (date(year, month + 1, 1) - date(year, month, 1)).days
-
-def ask_year(chat_id, uid, next_cb):
-    now = datetime.now(TZ)
-    start = now.year
-    kb = telebot.types.InlineKeyboardMarkup(row_width=3)
-    for y in range(start, start + 11):
-        kb.add(telebot.types.InlineKeyboardButton(str(y), callback_data=f"{next_cb}:{y}"))
-    TB.send_message(chat_id, "Select a year.", reply_markup=kb)
-
-def ask_month(chat_id, uid, year: int, next_cb):
-    kb = telebot.types.InlineKeyboardMarkup(row_width=4)
-    for m in range(1, 13):
-        kb.add(telebot.types.InlineKeyboardButton(f"{m:02d}", callback_data=f"{next_cb}:{year},{m}"))
-    TB.send_message(chat_id, f"Select a month of {year}.", reply_markup=kb)
-
-def ask_day(chat_id, uid, year: int, month: int, next_cb):
-    days = month_days(year, month)
-    kb = telebot.types.InlineKeyboardMarkup(row_width=7)
-    row = []
-    for d in range(1, days + 1):
-        row.append(telebot.types.InlineKeyboardButton(f"{d:02d}", callback_data=f"{next_cb}:{year},{month},{d}"))
-        if len(row) == 7:
-            kb.row(*row); row = []
-    if row: kb.row(*row)
-    TB.send_message(chat_id, f"Select a day: {year}-{month:02d}.", reply_markup=kb)
-
-def ask_end_same(chat_id):
-    kb = telebot.types.InlineKeyboardMarkup()
-    kb.add(telebot.types.InlineKeyboardButton("Single day", callback_data="end_same_yes"))
-    kb.add(telebot.types.InlineKeyboardButton("Multi-day", callback_data="end_same_no"))
-    TB.send_message(chat_id, "Is the event single-day?", reply_markup=kb)
-
-def ask_content(chat_id):
-    TB.send_message(chat_id, "Please enter the event title.")
-
-def create_event_via_google(chat_id, uid):
-    """Insert all-day event by selected start/end, then clear state."""
-    st = load_state().get(str(uid), {})
-    try:
-        y, mo, d = st["year"], st["month"], st["day"]
-        ey, em, ed = st["end_year"], st["end_month"], st["end_day"]
-    except KeyError:
-        TB.send_message(chat_id, "Flow state missing. Start again with /set."); return
-    title = st.get("title", "(untitled)")
-    try:
-        svc = get_google_service()
-    except Exception as e:
-        TB.send_message(chat_id, f"Google error: {e}"); return
-    cal_id = CFG["google"]["calendar"].get("id", "primary")
-    body = {
-        "summary": title,
-        "start": {"date": date(y, mo, d).isoformat()},
-        "end":   {"date": (date(ey, em, ed) + timedelta(days=1)).isoformat()},
-    }
-    try:
-        svc.events().insert(calendarId=cal_id, body=body).execute()
-        TB.send_message(chat_id, "Event created.")
-    except Exception as e:
-        TB.send_message(chat_id, f"Insert failed: {e}")
-    finally:
-        st_all = load_state(); st_all.pop(str(uid), None); save_state(st_all)
-
 def kb_inline(rows):
     kb = telebot.types.InlineKeyboardMarkup(row_width=1)
     for r in rows: kb.add(*r)
@@ -1805,59 +1581,19 @@ def kb_inline(rows):
 
 # === [SECTION: Telegram handlers (commands, callbacks, text)] ================
 if TB:
-    @TB.message_handler(commands=["start"])
-    def start_cmd(m):
-        if not allowed(m.from_user.id):
-            return TB.reply_to(m, "Not authorized.")
-        lines = [
-            "Welcome!",
-            "Use /frame or /set to configure the frame.",
-            "For Google Calendar, authorize at /oauth/start in the web UI."
-        ]
-        TB.reply_to(m, "\n".join(lines))
-
-    @TB.message_handler(commands=["frame"])
-    def frame_cmd(m):
-        if not allowed(m.from_user.id):
-            return TB.reply_to(m, "Not authorized.")
-        kb = kb_inline([
-            [telebot.types.InlineKeyboardButton("1) iCal URL View/Change", callback_data="cfg_ical")],
-            [telebot.types.InlineKeyboardButton("2) Todo (later)", callback_data="noop")],
-            [telebot.types.InlineKeyboardButton("3) Photos (later)", callback_data="noop")],
-            [telebot.types.InlineKeyboardButton("4) 버스정보", callback_data="cfg_bus")],
-        ])
-        TB.send_message(m.chat.id, "Smart Frame Settings", reply_markup=kb)
-
     @TB.message_handler(commands=["set"])
     def set_cmd(m):
         if not allowed(m.from_user.id):
             return TB.reply_to(m, "Not authorized.")
         kb = kb_inline([
-            [telebot.types.InlineKeyboardButton("1) calendar", callback_data="cfg_ical")],
-            [telebot.types.InlineKeyboardButton("2) google oauth status", callback_data="cfg_ghow")],
-            [telebot.types.InlineKeyboardButton("3) 버스정보", callback_data="cfg_bus")],
-            [telebot.types.InlineKeyboardButton("4) photo (later)", callback_data="noop")],
-            [telebot.types.InlineKeyboardButton("5) weather (later)", callback_data="noop")],
-            [telebot.types.InlineKeyboardButton("6) manage events", callback_data="cal_manage")],
-            [telebot.types.InlineKeyboardButton("7) verse", callback_data="set_verse")],
+            [telebot.types.InlineKeyboardButton("1) calendar iCal URL", callback_data="cfg_ical")],
+            [telebot.types.InlineKeyboardButton("2) 버스정보", callback_data="cfg_bus")],
+            [telebot.types.InlineKeyboardButton("3) weather api", callback_data="cfg_weather")],
+            [telebot.types.InlineKeyboardButton("4) verse", callback_data="set_verse")],
         ])
         TB.send_message(m.chat.id, "Select category:", reply_markup=kb)
 
-    # /cal merged into /set option 6
-    @TB.callback_query_handler(func=lambda c: c.data == "cal_manage")
-    def open_cal_manage(c):
-        if not allowed(c.from_user.id):
-            TB.answer_callback_query(c.id, "Not authorized."); return
-        TB.answer_callback_query(c.id)
-        kb = telebot.types.InlineKeyboardMarkup(row_width=2)
-        kb.add(
-            telebot.types.InlineKeyboardButton("Add", callback_data="cal_add"),
-            telebot.types.InlineKeyboardButton("Edit/Delete", callback_data="cal_edit_delete"),
-        )
-        kb.add(telebot.types.InlineKeyboardButton("View", callback_data="cal_view"))
-        TB.send_message(c.message.chat.id, "Calendar menu:", reply_markup=kb)
-
-    @TB.callback_query_handler(func=lambda c: c.data in ("cfg_ical", "cfg_ghow", "noop", "set_verse", "cfg_bus"))
+    @TB.callback_query_handler(func=lambda c: c.data in ("cfg_ical", "cfg_weather", "set_verse", "cfg_bus"))
     def on_cb(c):
         if not allowed(c.from_user.id):
             TB.answer_callback_query(c.id, "Not authorized."); return
@@ -1866,13 +1602,11 @@ if TB:
             st = load_state(); st[str(c.from_user.id)] = {"wait": "ical"}; save_state(st)
             TB.answer_callback_query(c.id)
             TB.send_message(c.message.chat.id, f"Current iCal URL:\n{url}\n\nSend a new URL, or /cancel to abort.")
-        elif c.data == "cfg_ghow":
+        elif c.data == "cfg_weather":
             TB.answer_callback_query(c.id)
-            if not have_google_libs():
-                TB.send_message(c.message.chat.id, "google-* libs missing. pip install google-auth google-auth-oauthlib google-api-python-client"); return
-            have_token = GTOKEN_PATH.exists()
-            msg = f"Google OAuth: {'connected' if have_token else 'not connected'}\nOpen /oauth/start in the web UI."
-            TB.send_message(c.message.chat.id, msg)
+            key = CFG.get("weather", {}).get("api_key", "(not set)")
+            st = load_state(); st[str(c.from_user.id)] = {"mode": "await_weather_api"}; save_state(st)
+            TB.send_message(c.message.chat.id, f"Current OpenWeather API key:\n{key}\n\nSend a new key, or /cancel to abort.")
         elif c.data == "set_verse":
             TB.answer_callback_query(c.id)
             st = load_state(); st[str(c.from_user.id)] = {"mode": "await_verse"}; save_state(st)
@@ -1887,9 +1621,6 @@ if TB:
                 telebot.types.InlineKeyboardButton("지정정류소 현황조회", callback_data="bus_test"),
             )
             TB.send_message(c.message.chat.id, "버스 정보 메뉴를 선택하세요:", reply_markup=kb)
-        elif c.data == "noop":
-            TB.answer_callback_query(c.id, "Coming soon")
-
     # ---- Bus settings flow
     @TB.callback_query_handler(func=lambda c: c.data in ("bus_set_stop", "bus_set_key", "bus_show_config", "bus_test"))
     def on_cb_bus(c):
@@ -1993,142 +1724,6 @@ if TB:
             TB.send_message(c.message.chat.id, f"정류소 등록 완료: {node}")
             return
 
-    # ---- Add flow
-    @TB.callback_query_handler(func=lambda c: c.data.startswith(("cal_add","add_year","add_month","add_day","end_same_","add_eyear","add_emonth","add_eday")))
-    def on_cb_add(c):
-        if not allowed(c.from_user.id):
-            TB.answer_callback_query(c.id, "Not authorized."); return
-        uid = c.from_user.id
-        data = c.data
-        if data == "cal_add":
-            st = load_state(); st[str(uid)] = {"mode": "add"}; save_state(st)
-            ask_year(c.message.chat.id, uid, next_cb="add_year"); TB.answer_callback_query(c.id); return
-        if data.startswith("add_year:"):
-            y = int(data.split(":")[1])
-            st = load_state().get(str(uid), {}); st.update({"year": y}); save_state({**load_state(), str(uid): st})
-            ask_month(c.message.chat.id, uid, y, next_cb="add_month"); TB.answer_callback_query(c.id); return
-        if data.startswith("add_month:"):
-            y, mo = map(int, data.split(":")[1].split(","))
-            st = load_state().get(str(uid), {}); st.update({"month": mo}); save_state({**load_state(), str(uid): st})
-            ask_day(c.message.chat.id, uid, y, mo, next_cb="add_day"); TB.answer_callback_query(c.id); return
-        if data.startswith("add_day:"):
-            y, mo, d_ = map(int, data.split(":")[1].split(","))
-            st = load_state().get(str(uid), {}); st.update({"day": d_}); save_state({**load_state(), str(uid): st})
-            ask_end_same(c.message.chat.id); TB.answer_callback_query(c.id); return
-        if data == "end_same_yes":
-            st = load_state().get(str(uid), {})
-            st["end_year"], st["end_month"], st["end_day"] = st["year"], st["month"], st["day"]
-            st["mode"] = "await_content"
-            save_state({**load_state(), str(uid): st})
-            ask_content(c.message.chat.id); TB.answer_callback_query(c.id); return
-        if data == "end_same_no":
-            st = load_state().get(str(uid), {}); st["mode"]="add_end_date"; save_state({**load_state(), str(uid): st})
-            ask_year(c.message.chat.id, uid, next_cb="add_eyear"); TB.answer_callback_query(c.id); return
-        if data.startswith("add_eyear:"):
-            y = int(data.split(":")[1])
-            st = load_state().get(str(uid), {}); st.update({"end_year": y}); save_state({**load_state(), str(uid): st})
-            ask_month(c.message.chat.id, uid, y, next_cb="add_emonth"); TB.answer_callback_query(c.id); return
-        if data.startswith("add_emonth:"):
-            y, mo = map(int, data.split(":")[1].split(","))
-            st = load_state().get(str(uid), {}); st.update({"end_month": mo}); save_state({**load_state(), str(uid): st})
-            ask_day(c.message.chat.id, uid, y, mo, next_cb="add_eday"); TB.answer_callback_query(c.id); return
-        if data.startswith("add_eday:"):
-            y, mo, d_ = map(int, data.split(":")[1].split(","))
-            st = load_state().get(str(uid), {}); st.update({"end_day": d_, "mode":"await_content"}); save_state({**load_state(), str(uid): st})
-            ask_content(c.message.chat.id); TB.answer_callback_query(c.id); return
-
-    # ---- View/Edit/Delete branches
-    @TB.callback_query_handler(func=lambda c: c.data in ("cal_view","cal_edit_delete"))
-    def cal_pick_mode(c):
-        if not allowed(c.from_user.id):
-            TB.answer_callback_query(c.id, "Not authorized."); return
-        TB.answer_callback_query(c.id)
-        chat_id = c.message.chat.id
-        if c.data == "cal_view":
-            send_event_picker(chat_id, action_prefix="view", max_results=10)
-        else:
-            kb = telebot.types.InlineKeyboardMarkup(row_width=2)
-            kb.add(
-                telebot.types.InlineKeyboardButton("Edit title", callback_data="edit_title_start"),
-                telebot.types.InlineKeyboardButton("Edit time", callback_data="edit_time_start"),
-            )
-            kb.add(telebot.types.InlineKeyboardButton("Delete", callback_data="del_start"))
-            TB.send_message(chat_id, "Choose action:", reply_markup=kb)
-
-    @TB.callback_query_handler(func=lambda c: c.data in ("edit_title_start","edit_time_start","del_start"))
-    def cal_choose_item(c):
-        if not allowed(c.from_user.id):
-            TB.answer_callback_query(c.id, "Not authorized."); return
-        TB.answer_callback_query(c.id)
-        chat_id = c.message.chat.id
-        if c.data == "edit_title_start":
-            send_event_picker(chat_id, action_prefix="edit", max_results=10)
-        elif c.data == "edit_time_start":
-            send_event_picker(chat_id, action_prefix="etime", max_results=10)
-        else:
-            send_event_picker(chat_id, action_prefix="del", max_results=10)
-
-    # === View picked event
-    @TB.callback_query_handler(func=lambda c: c.data.startswith("pick_view:"))
-    def on_pick_view(c):
-        if not allowed(c.from_user.id):
-            TB.answer_callback_query(c.id, "Not authorized."); return
-        TB.answer_callback_query(c.id)
-        ev_id = c.data.split(":",1)[1]
-        try:
-            ev = load_event(ev_id)
-        except Exception as e:
-            TB.send_message(c.message.chat.id, f"Load failed: {e}"); return
-        title = ev.get("summary") or "(untitled)"
-        TB.send_message(c.message.chat.id, f"Title: {title}\n{_fmt_start_end(ev)}\nLocation: {ev.get('location','-')}\nDesc: {ev.get('description','-')}")
-
-    # === Edit title: pick event -> ask new title
-    @TB.callback_query_handler(func=lambda c: c.data.startswith("pick_edit:"))
-    def on_pick_edit(c):
-        if not allowed(c.from_user.id):
-            TB.answer_callback_query(c.id, "Not authorized."); return
-        TB.answer_callback_query(c.id)
-        ev_id = c.data.split(":",1)[1]
-        st = load_state(); st[str(c.from_user.id)] = {"mode":"await_new_title", "ev_id": ev_id}; save_state(st)
-        TB.send_message(c.message.chat.id, "Enter new title. /cancel to abort.")
-
-    # === Edit time: pick event -> ask new times
-    @TB.callback_query_handler(func=lambda c: c.data.startswith("pick_etime:"))
-    def on_pick_etime(c):
-        if not allowed(c.from_user.id):
-            TB.answer_callback_query(c.id, "Not authorized."); return
-        TB.answer_callback_query(c.id)
-        ev_id = c.data.split(":",1)[1]
-        st = load_state(); st[str(c.from_user.id)] = {"mode":"await_time_edit", "ev_id": ev_id}; save_state(st)
-        examples = "e.g. 2025-09-02 14:00~16:00 / 8/30 9~11 / today 15:00~16:00 / 9/1~9/3 (all-day)"
-        TB.send_message(c.message.chat.id, f"Enter new time range.\n{examples}\n/cancel to abort.")
-
-    # === Delete: confirm
-    @TB.callback_query_handler(func=lambda c: c.data.startswith("pick_del:"))
-    def on_pick_del(c):
-        if not allowed(c.from_user.id):
-            TB.answer_callback_query(c.id, "Not authorized."); return
-        TB.answer_callback_query(c.id)
-        ev_id = c.data.split(":",1)[1]
-        kb = telebot.types.InlineKeyboardMarkup(row_width=2)
-        kb.add(
-            telebot.types.InlineKeyboardButton("Confirm delete", callback_data=f"del_confirm:{ev_id}"),
-            telebot.types.InlineKeyboardButton("Cancel", callback_data="noop"),
-        )
-        TB.send_message(c.message.chat.id, "Delete this event?", reply_markup=kb)
-
-    @TB.callback_query_handler(func=lambda c: c.data.startswith("del_confirm:"))
-    def on_del_confirm(c):
-        if not allowed(c.from_user.id):
-            TB.answer_callback_query(c.id, "Not authorized."); return
-        TB.answer_callback_query(c.id)
-        ev_id = c.data.split(":",1)[1]
-        try:
-            delete_event(ev_id)
-            TB.send_message(c.message.chat.id, "Deleted.")
-        except Exception as e:
-            TB.send_message(c.message.chat.id, f"Delete failed: {e}")
-
     @TB.message_handler(commands=["cancel"])
     def cancel(m):
         st = load_state(); st.pop(str(m.from_user.id), None); save_state(st)
@@ -2157,6 +1752,15 @@ if TB:
             txt = (m.text or "").strip()
             set_verse(txt)
             TB.reply_to(m, "Verse updated.")
+            allst = load_state(); allst.pop(str(m.from_user.id), None); save_state(allst)
+            return
+
+        # weather api key
+        if st.get("mode") == "await_weather_api":
+            val = (m.text or "").strip()
+            CFG["weather"]["api_key"] = val
+            save_config_to_source(CFG)
+            TB.reply_to(m, "Weather API key updated.")
             allst = load_state(); allst.pop(str(m.from_user.id), None); save_state(allst)
             return
 
@@ -2192,56 +1796,6 @@ if TB:
             save_config_to_source(CFG)
             TB.reply_to(m, "변경완료")
             allst = load_state(); allst.pop(str(m.from_user.id), None); save_state(allst)
-            return
-
-        # add flow: get title
-        if st.get("mode") == "await_content":
-            st["title"] = m.text.strip()
-            save_state({**load_state(), str(m.from_user.id): st})
-            create_event_via_google(m.chat.id, m.from_user.id)
-            return
-
-        # edit title
-        if st.get("mode") == "await_new_title":
-            new_title = (m.text or "").strip()
-            if not new_title:
-                TB.reply_to(m, "Empty title. Please enter again or /cancel"); return
-            ev_id = st.get("ev_id")
-            try:
-                patch_event(ev_id, summary=new_title)
-                TB.reply_to(m, "Title updated.")
-            except Exception as e:
-                TB.reply_to(m, f"Update failed: {e}")
-            finally:
-                allst = load_state(); allst.pop(str(m.from_user.id), None); save_state(allst)
-            return
-
-        # edit time
-        if st.get("mode") == "await_time_edit":
-            ev_id = st.get("ev_id")
-            try:
-                parsed = parse_when_range(m.text)
-            except Exception as e:
-                TB.reply_to(m, f"Parse error: {e}\nExample: 2025-09-02 14:00~16:00 / 8/30 9~11 / today 15:00~16:00"); return
-            try:
-                if parsed["kind"] == "timed":
-                    sd = parsed["start_dt"]; ed = parsed["end_dt"]
-                    body = {
-                        "start": {"dateTime": sd.isoformat(), "timeZone": TZ_NAME},
-                        "end":   {"dateTime": ed.isoformat(), "timeZone": TZ_NAME},
-                    }
-                else:
-                    sd = parsed["start_date"]; ed_incl = parsed["end_date"]
-                    body = {
-                        "start": {"date": sd.isoformat()},
-                        "end":   {"date": (ed_incl + timedelta(days=1)).isoformat()},
-                    }
-                patch_event(ev_id, **body)
-                TB.reply_to(m, "Time updated.")
-            except Exception as e:
-                TB.reply_to(m, f"Update failed: {e}")
-            finally:
-                allst = load_state(); allst.pop(str(m.from_user.id), None); save_state(allst)
             return
 
 # === [SECTION: Telegram start (webhook or polling) + duplication guard] ======
