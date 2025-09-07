@@ -73,6 +73,7 @@ import logging
 from flask import Flask, request, jsonify, render_template_string, abort, send_from_directory, redirect, url_for, make_response
 from werkzeug.middleware.proxy_fix import ProxyFix
 import telebot
+from functools import wraps
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s :: %(message)s",
@@ -1044,6 +1045,21 @@ def api_upload_photo():
     f.save(PHOTOS_DIR / fname)
     return jsonify({"ok": True, "filename": fname})
 
+@app.post("/api/delete-photos")
+def api_delete_photos():
+    js = request.get_json(force=True, silent=True) or {}
+    files = js.get("files") or []
+    removed = []
+    for name in files:
+        p = PHOTOS_DIR / name
+        try:
+            if p.exists():
+                p.unlink()
+                removed.append(name)
+        except Exception:
+            continue
+    return jsonify({"ok": True, "removed": removed})
+
 
 # === [SECTION: Board HTML (legacy UI; monthly calendar + photo fade)] ========
 BOARD_HTML = r"""
@@ -1644,15 +1660,21 @@ SETTING_HTML = r"""
 body{font-family:system-ui,-apple-system,Segoe UI,Roboto,'Noto Sans KR',sans-serif;padding:20px;line-height:1.6}
 table{border-collapse:collapse}
 td{padding:4px}
+#photo-gallery{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px}
+#photo-gallery .thumb{position:relative}
+#photo-gallery img{width:100px;height:100px;object-fit:cover}
+#photo-gallery input{position:absolute;top:2px;left:2px}
 </style>
 </head>
 <body>
 <h2>Settings</h2>
 <div id="config"></div>
 <h3>Photos</h3>
-<input type="file" id="photo-file" accept="image/*" capture="environment">
+<input type="file" id="photo-file" accept="image/*" multiple capture="environment">
 <button id="upload-btn">Upload</button>
-<ul id="photo-list"></ul>
+<button id="delete-btn">Delete</button>
+<button id="toggle-btn">Show Photos</button>
+<div id="photo-gallery" style="display:none;"></div>
 <script>
 const fields=[
   {label:'iCal URL',path:'frame.ical_url'},
@@ -1671,8 +1693,11 @@ async function loadConfig(){
     const tr=document.createElement('tr');
     const td1=document.createElement('td');td1.textContent=f.label;tr.appendChild(td1);
     const td2=document.createElement('td');
-    const inp=document.createElement('input');inp.type='text';inp.value=getValue(cfg,f.path);inp.size=40;
-    td2.appendChild(inp);tr.appendChild(td2);
+    const inp=document.createElement('input');inp.type='password';inp.value=getValue(cfg,f.path);inp.size=40;
+    td2.appendChild(inp);
+    const eye=document.createElement('span');eye.textContent='\uD83D\uDC41';eye.style.cursor='pointer';eye.style.marginLeft='4px';
+    eye.onclick=()=>{inp.type=inp.type==='password'?'text':'password';};
+    td2.appendChild(eye);tr.appendChild(td2);
     const td3=document.createElement('td');
     const btn=document.createElement('button');btn.textContent='확인';
     btn.onclick=async()=>{await fetch('/api/config/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:f.path,value:inp.value})});};
@@ -1685,20 +1710,36 @@ async function loadConfig(){
   cont.appendChild(saveBtn);
 }
 async function loadPhotos(){
-  const ul=document.getElementById('photo-list');ul.innerHTML='';
+  const g=document.getElementById('photo-gallery');g.innerHTML='';
   const r=await fetch('/api/photos');const arr=await r.json();
   arr.forEach(name=>{
-    const li=document.createElement('li');
-    const a=document.createElement('a');a.href='/photos/'+encodeURIComponent(name);a.textContent=name;a.target='_blank';
-    li.appendChild(a);ul.appendChild(li);
+    const div=document.createElement('div');div.className='thumb';
+    const chk=document.createElement('input');chk.type='checkbox';chk.value=name;div.appendChild(chk);
+    const img=document.createElement('img');img.src='/photos/'+encodeURIComponent(name);div.appendChild(img);
+    g.appendChild(div);
   });
 }
 document.getElementById('upload-btn').onclick=async()=>{
   const fi=document.getElementById('photo-file');
   if(!fi.files.length)return;
-  const fd=new FormData();fd.append('file',fi.files[0]);
-  await fetch('/api/upload-photo',{method:'POST',body:fd});
+  for(const file of fi.files){
+    const fd=new FormData();fd.append('file',file);
+    await fetch('/api/upload-photo',{method:'POST',body:fd});
+  }
   fi.value='';loadPhotos();
+};
+document.getElementById('delete-btn').onclick=async()=>{
+  const sel=[...document.querySelectorAll('#photo-gallery input:checked')].map(ch=>ch.value);
+  if(!sel.length)return;
+  await fetch('/api/delete-photos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({files:sel})});
+  loadPhotos();
+};
+const toggleBtn=document.getElementById('toggle-btn');
+toggleBtn.onclick=()=>{
+  const g=document.getElementById('photo-gallery');
+  const hide=g.style.display==='none';
+  g.style.display=hide?'flex':'none';
+  toggleBtn.textContent=hide?'Hide Photos':'Show Photos';
 };
 loadConfig();loadPhotos();
 </script>
@@ -1706,11 +1747,96 @@ loadConfig();loadPhotos();
 </html>
 """
 
+LOGIN_HTML = r"""
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Login</title>
+<style>
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,'Noto Sans KR',sans-serif;padding:20px}
+form{max-width:300px;margin:auto;display:flex;flex-direction:column;gap:6px}
+input{padding:8px}
+a{font-size:0.9em}
+</style>
+</head>
+<body>
+<form method="post">
+  <input name="user" placeholder="Username" required>
+  <input name="pw" type="password" placeholder="Password" required>
+  <button type="submit">Login</button>
+  <div><a href="#">Forgot your password?</a> | <a href="#">Create an account</a></div>
+</form>
+</body>
+</html>
+"""
+
+LANDING_HTML = r"""
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Home</title>
+<style>
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,'Noto Sans KR',sans-serif;padding:20px}
+.card{width:220px;height:150px;border:1px solid #ccc;position:relative;display:flex;align-items:center;justify-content:center}
+.menu{position:absolute;top:5px;right:5px}
+.menu button{background:none;border:none;font-size:20px;cursor:pointer}
+.popup{display:none;position:absolute;top:25px;right:5px;border:1px solid #ccc;background:#fff}
+.popup a{display:block;padding:5px 10px;text-decoration:none;color:#000}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="menu"><button id="menu-btn">⋯</button>
+    <div id="menu-popup" class="popup">
+      <a href="/board">View</a>
+      <a href="/setting">Setting</a>
+    </div>
+  </div>
+  <div>My Screen</div>
+</div>
+<script>
+const btn=document.getElementById('menu-btn');
+const pop=document.getElementById('menu-popup');
+btn.onclick=()=>{pop.style.display=pop.style.display==='block'?'none':'block';};
+document.addEventListener('click',e=>{if(e.target!==btn && !pop.contains(e.target))pop.style.display='none';});
+</script>
+</body>
+</html>
+"""
+
+def require_login(fn):
+    @wraps(fn)
+    def wrapper(*a, **k):
+        if request.cookies.get("auth") != "1":
+            return redirect("/login")
+        return fn(*a, **k)
+    return wrapper
+
+@app.route("/login", methods=["GET", "POST"])
+def login_page():
+    if request.method == "POST":
+        user = request.form.get("user", "")
+        pw = request.form.get("pw", "")
+        if user == "root" and pw == "qwer1234":
+            resp = make_response(redirect("/home"))
+            resp.set_cookie("auth", "1", max_age=86400, httponly=True)
+            return resp
+        return render_template_string(LOGIN_HTML), 401
+    return render_template_string(LOGIN_HTML)
+
+@app.get("/home")
+@require_login
+def home_after_login():
+    return render_template_string(LANDING_HTML)
+
 @app.get("/board")
 def board():
     return render_template_string(BOARD_HTML)
 
 @app.get("/setting")
+@require_login
 def setting_page():
     return render_template_string(SETTING_HTML)
 
