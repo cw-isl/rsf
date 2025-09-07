@@ -811,6 +811,34 @@ def list_local_images():
             files.append(str(p.relative_to(PHOTOS_DIR)))
     return files
 
+
+def tb_build_photo_keyboard(page: int = 0, per: int = 20) -> telebot.types.InlineKeyboardMarkup:
+    files = list_local_images()
+    kb = telebot.types.InlineKeyboardMarkup()
+    items = bb_paginate(files, page, per)
+    for i, name in enumerate(items):
+        idx = page * per + i
+        kb.add(
+            telebot.types.InlineKeyboardButton(name, callback_data=f"photo_sel:{page}:{idx}")
+        )
+    nav = []
+    if page > 0:
+        nav.append(telebot.types.InlineKeyboardButton("Prev", callback_data=f"photo_page:{page-1}"))
+    if (page + 1) * per < len(files):
+        nav.append(telebot.types.InlineKeyboardButton("Next", callback_data=f"photo_page:{page+1}"))
+    if nav:
+        kb.row(*nav)
+    return kb
+
+
+def tb_photo_confirm_keyboard(page: int, idx: int) -> telebot.types.InlineKeyboardMarkup:
+    kb = telebot.types.InlineKeyboardMarkup()
+    kb.add(
+        telebot.types.InlineKeyboardButton("삭제", callback_data=f"photo_del_ok:{page}:{idx}"),
+        telebot.types.InlineKeyboardButton("취소", callback_data=f"photo_del_no:{page}"),
+    )
+    return kb
+
 # === [SECTION: Flask app / session / proxy headers] ==========================
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
@@ -1598,10 +1626,11 @@ if TB:
             [telebot.types.InlineKeyboardButton("3) weather api", callback_data="cfg_weather")],
             [telebot.types.InlineKeyboardButton("4) verse", callback_data="set_verse")],
             [telebot.types.InlineKeyboardButton("5) todo api", callback_data="cfg_todo")],
+            [telebot.types.InlineKeyboardButton("6) photo", callback_data="cfg_photo")],
         ])
         TB.send_message(m.chat.id, "Select category:", reply_markup=kb)
 
-    @TB.callback_query_handler(func=lambda c: c.data in ("cfg_ical", "cfg_weather", "set_verse", "cfg_bus", "cfg_todo"))
+    @TB.callback_query_handler(func=lambda c: c.data in ("cfg_ical", "cfg_weather", "set_verse", "cfg_bus", "cfg_todo", "cfg_photo"))
     def on_cb(c):
         if not allowed(c.from_user.id):
             TB.answer_callback_query(c.id, "Not authorized."); return
@@ -1624,6 +1653,14 @@ if TB:
             key = CFG.get("todoist", {}).get("api_token", "(not set)")
             st = load_state(); st[str(c.from_user.id)] = {"mode": "await_todo_api"}; save_state(st)
             TB.send_message(c.message.chat.id, f"Current Todoist API token:\n{key}\n\nSend a new token, or /cancel to abort.")
+        elif c.data == "cfg_photo":
+            TB.answer_callback_query(c.id)
+            kb = telebot.types.InlineKeyboardMarkup(row_width=1)
+            kb.add(
+                telebot.types.InlineKeyboardButton("삭제", callback_data="photo_delete"),
+                telebot.types.InlineKeyboardButton("추가", callback_data="photo_add"),
+            )
+            TB.send_message(c.message.chat.id, "사진 관리:", reply_markup=kb)
         elif c.data == "cfg_bus":
             TB.answer_callback_query(c.id)
             kb = telebot.types.InlineKeyboardMarkup(row_width=1)
@@ -1634,6 +1671,69 @@ if TB:
                 telebot.types.InlineKeyboardButton("지정정류소 현황조회", callback_data="bus_test"),
             )
             TB.send_message(c.message.chat.id, "버스 정보 메뉴를 선택하세요:", reply_markup=kb)
+
+    @TB.callback_query_handler(func=lambda c: c.data.startswith("photo_"))
+    def on_cb_photo(c):
+        if not allowed(c.from_user.id):
+            TB.answer_callback_query(c.id, "Not authorized."); return
+        TB.answer_callback_query(c.id)
+        uid = c.from_user.id
+        data = c.data
+        if data == "photo_add":
+            st = load_state(); st[str(uid)] = {"mode": "await_photo"}; save_state(st)
+            TB.send_message(c.message.chat.id, "사진을 올려주세요.")
+        elif data == "photo_delete":
+            files = list_local_images()
+            if not files:
+                TB.send_message(c.message.chat.id, "사진이 없습니다.")
+            else:
+                TB.send_message(
+                    c.message.chat.id,
+                    "삭제할 사진을 선택하세요:",
+                    reply_markup=tb_build_photo_keyboard(0),
+                )
+        elif data.startswith("photo_page:"):
+            page = int(data.split(":", 1)[1])
+            TB.edit_message_reply_markup(
+                c.message.chat.id,
+                c.message.message_id,
+                reply_markup=tb_build_photo_keyboard(page),
+            )
+        elif data.startswith("photo_sel:"):
+            _, page, idx = data.split(":")
+            page = int(page); idx = int(idx)
+            files = list_local_images()
+            if 0 <= idx < len(files):
+                name = files[idx]
+                TB.send_message(
+                    c.message.chat.id,
+                    f"{name} 삭제할까요?",
+                    reply_markup=tb_photo_confirm_keyboard(page, idx),
+                )
+        elif data.startswith("photo_del_ok:"):
+            _, page, idx = data.split(":")
+            page = int(page); idx = int(idx)
+            files = list_local_images()
+            if 0 <= idx < len(files):
+                name = files[idx]
+                try:
+                    (PHOTOS_DIR / name).unlink()
+                    TB.send_message(c.message.chat.id, f"삭제 완료: {name}")
+                except Exception as e:
+                    TB.send_message(c.message.chat.id, f"삭제 실패: {e}")
+            files = list_local_images()
+            if files:
+                max_page = max((len(files) - 1) // 20, 0)
+                page = min(page, max_page)
+                TB.send_message(
+                    c.message.chat.id,
+                    "삭제할 사진을 선택하세요:",
+                    reply_markup=tb_build_photo_keyboard(page),
+                )
+            else:
+                TB.send_message(c.message.chat.id, "사진이 없습니다.")
+        elif data.startswith("photo_del_no:"):
+            TB.edit_message_reply_markup(c.message.chat.id, c.message.message_id)
     # ---- Bus settings flow
     @TB.callback_query_handler(func=lambda c: c.data in ("bus_set_stop", "bus_set_key", "bus_show_config", "bus_test"))
     def on_cb_bus(c):
@@ -1736,6 +1836,22 @@ if TB:
             st_all.pop(str(uid), None); save_state(st_all)
             TB.send_message(c.message.chat.id, f"정류소 등록 완료: {node}")
             return
+
+    @TB.message_handler(content_types=["photo"])
+    def on_photo(m):
+        st = load_state().get(str(m.from_user.id))
+        if not st or st.get("mode") != "await_photo":
+            return
+        try:
+            file_id = m.photo[-1].file_id
+            info = TB.get_file(file_id)
+            data = TB.download_file(info.file_path)
+            ext = os.path.splitext(info.file_path)[1] or ".jpg"
+            fname = f"{int(time.time())}_{file_id}{ext}"
+            (PHOTOS_DIR / fname).write_bytes(data)
+            TB.reply_to(m, f"업로드 완료: {fname}")
+        except Exception as e:
+            TB.reply_to(m, f"업로드 실패: {e}")
 
     @TB.message_handler(commands=["cancel"])
     def cancel(m):
