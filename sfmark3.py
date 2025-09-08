@@ -65,7 +65,7 @@ import os, json, time, secrets, threading, collections, re, socket, fcntl, xml.e
 from pathlib import Path
 from datetime import datetime, timezone, timedelta, date
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import requests
 import html
@@ -430,12 +430,16 @@ def _normalize_arrmsg(msg: str, fallback_seconds: Optional[int]) -> Tuple[str, s
 
 
 def tago_get_arrivals(city_code: str, node_id: str, service_key: str) -> Tuple[str, List[str]]:
+    key = unquote(service_key)
     url = (
         "http://apis.data.go.kr/1613000/BusArrivalService/getBusArrivalList"
-        f"?serviceKey={quote(service_key)}&cityCode={quote(str(city_code))}&nodeId={quote(str(node_id))}"
+        f"?serviceKey={quote(key)}&cityCode={quote(str(city_code))}&nodeId={quote(str(node_id))}"
     )
     r = requests.get(url, timeout=7)
-    r.raise_for_status()
+    try:
+        r.raise_for_status()
+    except requests.HTTPError:
+        raise RuntimeError(f"{r.status_code} {r.reason}: {r.text.strip()}")
     root = ET.fromstring(r.text)
     records: List[Tuple[int, str]] = []
     stop_name = ""
