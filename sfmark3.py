@@ -1089,7 +1089,7 @@ BOARD_HTML = r"""
   .time { font-size:38px; font-weight:700; letter-spacing:1px; text-shadow:0 0 6px rgba(0,0,0,.65);}
   .date { font-size:22px; opacity:.95; text-shadow:0 0 6px rgba(0,0,0,.65);}
   .top-right{display:flex;align-items:center;gap:20px}
-  .logout{font-size:22px;opacity:.95;color:#fff;text-decoration:none;text-shadow:0 0 6px rgba(0,0,0,.65)}
+  .top-right a{font-size:22px;opacity:.95;color:#fff;text-decoration:none;text-shadow:0 0 6px rgba(0,0,0,.65)}
 
   .cal { height:var(--cal); padding:8px 20px; box-sizing:border-box; display:flex; flex-direction:column; }
   .cal h2 { margin:0 0 8px 0; font-size:22px; opacity:.95; display:flex; align-items:center; gap:8px; text-shadow:0 0 6px rgba(0,0,0,.65);}
@@ -1202,7 +1202,8 @@ BOARD_HTML = r"""
     <div class="time" id="clock">--:--</div>
     <div class="top-right">
       <div class="date" id="datetxt">----</div>
-      <a href="/logout" class="logout">Logout</a>
+      <a href="/home" class="back">Back</a>
+      <a href="/logout">Logout</a>
     </div>
   </div>
 
@@ -1669,11 +1670,11 @@ td{padding:4px}
 #photo-gallery .thumb{position:relative}
 #photo-gallery img{width:100px;height:100px;object-fit:cover}
 #photo-gallery input{position:absolute;top:2px;left:2px}
-.logout{position:fixed;top:10px;right:10px}
+.top-right{position:fixed;top:10px;right:10px;display:flex;gap:10px}
 </style>
 </head>
 <body>
-<a href="/logout" class="logout">Logout</a>
+<div class="top-right"><a href="/home">Back</a><a href="/logout">Logout</a></div>
 <h2>Settings</h2>
 <div id="config"></div>
 <h3>Photos</h3>
