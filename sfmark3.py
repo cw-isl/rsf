@@ -1088,6 +1088,8 @@ BOARD_HTML = r"""
   .top { height:var(--top); display:flex; align-items:center; justify-content:space-between; padding:0 24px; box-sizing:border-box; }
   .time { font-size:38px; font-weight:700; letter-spacing:1px; text-shadow:0 0 6px rgba(0,0,0,.65);}
   .date { font-size:22px; opacity:.95; text-shadow:0 0 6px rgba(0,0,0,.65);}
+  .top-right{display:flex;align-items:center;gap:20px}
+  .logout{font-size:22px;opacity:.95;color:#fff;text-decoration:none;text-shadow:0 0 6px rgba(0,0,0,.65)}
 
   .cal { height:var(--cal); padding:8px 20px; box-sizing:border-box; display:flex; flex-direction:column; }
   .cal h2 { margin:0 0 8px 0; font-size:22px; opacity:.95; display:flex; align-items:center; gap:8px; text-shadow:0 0 6px rgba(0,0,0,.65);}
@@ -1195,11 +1197,13 @@ BOARD_HTML = r"""
 <div class="bg" id="bg1"></div>
 <div class="bg2" id="bg2"></div>
 
-<a href="/logout" style="position:fixed;top:10px;right:10px;color:#fff;z-index:10;">Logout</a>
 <div class="frame">
   <div class="top">
     <div class="time" id="clock">--:--</div>
-    <div class="date" id="datetxt">----</div>
+    <div class="top-right">
+      <div class="date" id="datetxt">----</div>
+      <a href="/logout" class="logout">Logout</a>
+    </div>
   </div>
 
   <div class="cal">
@@ -1665,13 +1669,14 @@ td{padding:4px}
 #photo-gallery .thumb{position:relative}
 #photo-gallery img{width:100px;height:100px;object-fit:cover}
 #photo-gallery input{position:absolute;top:2px;left:2px}
+.logout{position:fixed;top:10px;right:10px}
 </style>
 </head>
 <body>
+<a href="/logout" class="logout">Logout</a>
 <h2>Settings</h2>
 <div id="config"></div>
 <h3>Photos</h3>
-<a href="/logout">Logout</a>
 <input type="file" id="photo-file" accept="image/*" multiple style="display:none">
 <button id="upload-btn">Upload</button>
 <button id="delete-btn">Delete</button>
@@ -1687,6 +1692,7 @@ const fields=[
   {label:'Bus stop ID',path:'bus.node_id'},
   {label:'Telegram bot token',path:'telegram.bot_token'}
 ];
+let pendingFiles=[];
 function getValue(obj,path){return path.split('.').reduce((o,k)=>o&&o[k]!=null?o[k]:'',obj);}
 async function loadConfig(){
   const r=await fetch('/api/config');const cfg=await r.json();
@@ -1736,7 +1742,16 @@ async function loadConfig(){
   });
   cont.appendChild(tbl);
   const saveBtn=document.createElement('button');saveBtn.textContent='저장';
-  saveBtn.onclick=async()=>{await fetch('/api/config/save',{method:'POST'});alert('Saved');};
+  saveBtn.onclick=async()=>{
+    for(const file of pendingFiles){
+      const fd=new FormData();fd.append('file',file);
+      await fetch('/api/upload-photo',{method:'POST',body:fd});
+    }
+    pendingFiles=[];
+    await fetch('/api/config/save',{method:'POST'});
+    loadPhotos();
+    alert('Saved');
+  };
   cont.appendChild(saveBtn);
 }
 async function loadPhotos(){
@@ -1750,15 +1765,20 @@ async function loadPhotos(){
   });
 }
 const fi=document.getElementById('photo-file');
+const toggleBtn=document.getElementById('toggle-btn');
 document.getElementById('upload-btn').onclick=()=>fi.click();
-fi.onchange=async()=>{
+fi.onchange=()=>{
   if(!fi.files.length)return;
+  const g=document.getElementById('photo-gallery');
   for(const file of fi.files){
-    const fd=new FormData();fd.append('file',file);
-    await fetch('/api/upload-photo',{method:'POST',body:fd});
+    pendingFiles.push(file);
+    const div=document.createElement('div');div.className='thumb pending';
+    const img=document.createElement('img');img.src=URL.createObjectURL(file);
+    div.appendChild(img);
+    g.appendChild(div);
   }
   fi.value='';
-  loadPhotos();
+  if(g.style.display==='none'){g.style.display='flex';toggleBtn.textContent='Hide Photos';}
 };
 document.getElementById('delete-btn').onclick=async()=>{
   const sel=[...document.querySelectorAll('#photo-gallery input:checked')].map(ch=>ch.value);
@@ -1766,7 +1786,6 @@ document.getElementById('delete-btn').onclick=async()=>{
   await fetch('/api/delete-photos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({files:sel})});
   loadPhotos();
 };
-const toggleBtn=document.getElementById('toggle-btn');
 toggleBtn.onclick=()=>{
   const g=document.getElementById('photo-gallery');
   const hide=g.style.display==='none';
